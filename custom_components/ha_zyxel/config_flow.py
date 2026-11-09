@@ -19,7 +19,7 @@ from .const import DEFAULT_HOST, DEFAULT_USERNAME, DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 # Block excessive nr7101 debug logging
-nr7101_logger = logging.getLogger("nr7101.nr7101")
+nr7101_logger = logging.getLogger(f"{__package__}.nr7101")
 nr7101_logger.setLevel(logging.WARNING)
 
 DATA_SCHEMA = vol.Schema(

@@ -1,3 +1,12 @@
+> **Copia personale di [zulufoxtrot/ha-zyxel](https://github.com/zulufoxtrot/ha-zyxel).**
+> Nell'originale ogni domanda al router apre una connessione nuova, senza limite di tempo.
+> Se il router smette di rispondere, Home Assistant accumula letture in attesa finché non si
+> blocca, e il server web del router può andare in sovraccarico. Qui ogni lettura usa una sola
+> connessione, esce dal router quando l'integrazione si spegne e si chiude entro un tempo
+> massimo. Il router si legge ogni 2 minuti invece che ogni 30 secondi. La libreria `nr7101`
+> è inclusa, con la stessa correzione. La prova si lancia con `python tests/test_fake_modem.py`.
+> Ogni lunedì un workflow unisce le novità dell'originale.
+
 # ha-zyxel
 
 <img src="https://raw.githubusercontent.com/zulufoxtrot/ha-zyxel/refs/heads/main/resources/logo.png" alt="Zyxel Logo" width="128"/>

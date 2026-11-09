@@ -16,7 +16,7 @@ import requests
 import urllib3
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
-from nr7101 import nr7101
+from . import nr7101
 
 _LOGGER = logging.getLogger(__name__)
 
