@@ -1,5 +1,6 @@
 # Vendored from https://github.com/zulufoxtrot/nr7101 (v2.0.2, MIT, see
-# LICENSE.nr7101) with an optional requests.Session for all calls. Kept here
+# LICENSE.nr7101) with an optional requests.Session for all calls, trimmed to
+# what this integration uses (setup, login, request encryption). Kept here
 # so this fork does not wait for an nr7101 release.
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -15,11 +16,6 @@ import requests
 import urllib3
 
 logger = logging.getLogger(__name__)
-
-
-class NR7101Exception(Exception):
-    def __init__(self, error):
-        self.error = error
 
 
 class NR7101:
@@ -99,26 +95,6 @@ class NR7101:
         }
         self.sessionkey = None
 
-    def load_cookies(self, cookiefile):
-        cookies = {}
-        try:
-            with open(cookiefile, "rt") as f:
-                cookies = json.load(f)
-            self.params["cookies"] = cookies
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-
-    def clear_cookies(self):
-        self.params.pop("cookies", None)
-
-    def store_cookies(self, cookiefile):
-        try:
-            cookies = self.params["cookies"]
-            with open(cookiefile, "wt") as f:
-                json.dump(cookies, f)
-        except KeyError:
-            pass
-
     def login(self):
         if self.encryption_required:
            login_json = self.encrypt_request(self.login_params)
@@ -168,140 +144,6 @@ class NR7101:
                 response_data = r.json()
             self.sessionkey = response_data["sessionkey"]
             return True
-
-    def logout(self, sessionkey=None):
-        if sessionkey is None:
-            sessionkey = self.sessionkey
-        with self.http.get(
-            f"{self.url}/cgi-bin/UserLogout?sessionkey={sessionkey}", **self.params
-        ) as r:
-            assert r.status_code == 200
-
-    def connect(self):
-        with self.http.get(self.url + "/getBasicInformation", **self.params) as r:
-            assert r.status_code == 200
-            assert r.json()["result"] == "ZCFG_SUCCESS", "Connection failure"
-
-        # Check login
-        with self.http.get(self.url + "/UserLoginCheck", **self.params) as r:
-            assert r.status_code == 200
-
-    def get_status(self, retries=2):
-        def parse_traffic_object(obj):
-            ret = {}
-            if obj and "ipIface" in obj and "ipIfaceSt" in obj:
-                for iface, iface_st in zip(obj["ipIface"], obj["ipIfaceSt"]):
-                    ret[iface["X_ZYXEL_IfName"]] = iface_st
-            return ret
-
-        # Define endpoint priorities based on router type
-        endpoints_to_try = [
-            ("cellwan_status", "cellular"),
-            ("Traffic_Status", "traffic"),
-            ("cardpage_status", "cardpage"),
-            ("lan", "lan"),
-            ("lanhosts", "lanhosts"),
-            ("wifi_easy_mesh", "wifi_mesh"),
-            ("one_connect", "one_connect"),
-            ("status", "device"),
-        ]
-
-        while retries > 0:
-            try:
-                result = {}
-                successful_endpoints = 0
-
-                for endpoint, key in endpoints_to_try:
-                    try:
-                        if endpoint == "Traffic_Status":
-                            # Special handling for traffic data
-                            traffic_obj = self.get_json_object(endpoint)
-                            data = parse_traffic_object(traffic_obj)
-                        else:
-                            data = self.get_json_object(endpoint)
-
-                        if data:
-                            result[key] = data
-                            successful_endpoints += 1
-                    except requests.exceptions.HTTPError as e:
-                        if e.response.status_code == 401:
-                            # Re-raise 401 to trigger login retry
-                            raise
-                    except Exception:
-                        continue
-
-                if successful_endpoints > 0:
-                    return result
-
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 401:
-                    # Unauthorized - attempt login
-                    login_success = self.login()
-                    if not login_success:
-                        break
-                elif e.response.status_code == 500:
-                    # Internal server error - retry without cookies
-                    self.clear_cookies()
-                retries -= 1
-        return None
-
-    def probe_available_endpoints(self):
-        """Probe which endpoints are available on this router for debugging."""
-        endpoints_to_probe = [
-            "cellwan_status",
-            "Traffic_Status",
-            "cardpage_status",
-            "lan",
-            "lanhosts",
-            "wifi_easy_mesh",
-            "one_connect",
-            "status",
-            "paren_ctl",
-            "wlan_status",
-            "eth_status"
-        ]
-
-        available_endpoints = []
-        for endpoint in endpoints_to_probe:
-            try:
-                data = self.get_json_object(endpoint)
-                if data:
-                    available_endpoints.append(endpoint)
-            except Exception:
-                continue
-
-        return available_endpoints
-
-    def get_json_object(self, oid):
-        # Add session key to URL for authenticated requests
-        if self.sessionkey:
-            url = self.url + "/cgi-bin/DAL?oid=" + oid + "&sessionkey=" + str(self.sessionkey)
-        else:
-            url = self.url + "/cgi-bin/DAL?oid=" + oid
-
-        with self.http.get(url, **self.params) as r:
-            r.raise_for_status()
-
-            if self.encryption_required:
-                j = self.decrypt_response(r.json())
-            else:
-                j = r.json()
-
-            if j.get("result") != "ZCFG_SUCCESS" or not j.get("Object"):
-                return None
-
-            return j["Object"][0]
-
-    def reboot(self):
-        if self.sessionkey is None:
-            self.login()
-
-        with self.http.post(
-            f"{self.url}/cgi-bin/Reboot?sessionkey={self.sessionkey}", **self.params
-        ) as r:
-            r.raise_for_status()
-            j = r.json()
-            assert j["result"] == "ZCFG_SUCCESS"
 
     def encrypt_request(self, json_data: dict) -> str:
         # Use compact JSON formatting to match browser behavior
