@@ -141,8 +141,8 @@ def _logout(router: Any) -> None:
     _drop_kept_alive_connection(router)
     url = f"{router.url}/cgi-bin/UserLogout?sessionkey={router.sessionkey}"
     try:
-        # Not nr7101's logout(): it reads the whole reply, which a trickling
-        # modem can stretch forever. The reply is not needed past the headers.
+        # Streamed and closed after the headers: reading the whole reply would
+        # let a trickling modem stretch the logout forever, and it is not needed.
         with router.ha_zyxel_session.get(url, **{**router.params, "stream": True}):
             pass
     except Exception as err:  # noqa: BLE001
@@ -264,7 +264,7 @@ def _decode(router: Any, data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_objects(router: Any, oid: str) -> list[dict[str, Any]]:
-    """Return every object of a DAL oid (get_json_object only returns the first)."""
+    """Return every object of a DAL oid."""
     url = f"{router.url}/cgi-bin/DAL?oid={oid}&sessionkey={router.sessionkey}"
     params = {
         **router.params,
@@ -420,8 +420,7 @@ def reboot_router(router: Any) -> None:
     """Reboot the modem the way the web UI does.
 
     The UI sends ``POST /cgi-bin/Reboot`` with no body and the session key in a
-    ``CSRFToken`` header. nr7101's own reboot() puts the key in the URL instead,
-    which newer firmware rejects with 403.
+    ``CSRFToken`` header. Newer firmware rejects the key in the URL with 403.
     """
     with router.ha_zyxel_lock:
         _drop_kept_alive_connection(router)
