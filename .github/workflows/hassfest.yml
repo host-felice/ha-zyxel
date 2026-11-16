@@ -15,3 +15,11 @@ jobs:
     steps:
         - uses: "actions/checkout@v4"
         - uses: "home-assistant/actions/hassfest@master"
+        - uses: actions/setup-python@v6
+          with:
+            python-version: '3.13'
+        - name: Test
+          run: |
+            pip install requests "$(jq -r '.requirements[]' custom_components/ha_zyxel/manifest.json)"
+            python tests/test_fake_modem.py
+            python tests/test_device_info.py
