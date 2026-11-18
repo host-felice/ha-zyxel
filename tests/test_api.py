@@ -186,3 +186,16 @@ def test_set_port_forward_raises_when_refused():
             api.set_port_forward_enabled(router, {"Index": 1, "Enable": False}, True)
     finally:
         api.put_object = real_put
+
+
+def test_waits_follow_the_poll_interval():
+    assert api.timeout_scale(30) == api.timeout_scale(60) == 1
+    assert api.timeout_scale(90) == 1.5
+    assert api.timeout_scale(120) == api.timeout_scale(3600) == 2
+
+    router = FakeCipherRouter()
+    router.ha_zyxel_deadline = None
+    router.ha_zyxel_scale = api.timeout_scale(120)
+    assert api._request_timeout(router) == (api.REQUEST_TIMEOUT[0], api.REQUEST_TIMEOUT[1] * 2)
+    # The longest poll still fits the coordinator timeout (__init__.py: 90 s scaled).
+    assert api._wait(router, api.POLL_BUDGET + api.REQUEST_TIMEOUT[1]) <= 90 * router.ha_zyxel_scale

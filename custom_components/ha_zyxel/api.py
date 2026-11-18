@@ -47,6 +47,23 @@ LOCK_TIMEOUT = 45
 # within POLL_BUDGET + 30 s: before the coordinator's 90 s limit abandons it.
 POLL_BUDGET = 55
 
+
+def timeout_scale(scan_interval: float) -> float:
+    """How much longer than the defaults to wait, for a slower poll interval.
+
+    Up to 60 s the defaults hold; from 120 s every wait is doubled. A slow modem
+    then gets more time, and polls still never overlap.
+    """
+    return min(max(scan_interval / 60, 1), 2)
+
+
+def _wait(router: Any, seconds: float) -> float:
+    return seconds * getattr(router, "ha_zyxel_scale", 1)
+
+
+def _base_timeout(router: Any) -> tuple[float, float]:
+    return (REQUEST_TIMEOUT[0], _wait(router, REQUEST_TIMEOUT[1]))
+
 # The modem keeps a single login session per user: a new login invalidates the
 # AES key of the previous one, so any request still in flight decrypts to
 # garbage ("'utf-8' codec can't decode byte ..."). Serialize every operation
@@ -74,7 +91,9 @@ class ZyxelBusyError(ZyxelConnectionError):
     """Raised when the previous request to the router has not finished yet."""
 
 
-def create_router(host: str, username: str, password: str) -> Any:
+def create_router(
+    host: str, username: str, password: str, scan_interval: float = 60
+) -> Any:
     """Create a router with connection state isolated from other instances.
 
     nr7101 currently uses a mutable dictionary as its default ``params``
@@ -98,7 +117,8 @@ def create_router(host: str, username: str, password: str) -> Any:
         )
     finally:
         lock.release()
-    router.params["timeout"] = REQUEST_TIMEOUT
+    router.ha_zyxel_scale = timeout_scale(scan_interval)
+    router.params["timeout"] = _base_timeout(router)
     router.ha_zyxel_lock = lock
     router.ha_zyxel_session = session
     router.ha_zyxel_deadline = None
@@ -108,12 +128,13 @@ def create_router(host: str, username: str, password: str) -> Any:
 
 def _request_timeout(router: Any) -> tuple[float, float]:
     """Return the timeout for the next request, within the poll's budget."""
+    connect, read = _base_timeout(router)
     if router.ha_zyxel_deadline is None:
-        return REQUEST_TIMEOUT
+        return (connect, read)
     left = router.ha_zyxel_deadline - time.monotonic()
     if left <= 0:
         raise requests.exceptions.Timeout("The poll ran out of time")
-    return (min(REQUEST_TIMEOUT[0], left), min(REQUEST_TIMEOUT[1], left))
+    return (min(connect, left), min(read, left))
 
 
 def close_router(router: Any) -> None:
@@ -124,7 +145,9 @@ def close_router(router: Any) -> None:
         router.ha_zyxel_session.close()  # Not logged in: nothing to wait for.
         return
     # A running poll ends within POLL_BUDGET + one read: wait, then log out.
-    locked = router.ha_zyxel_lock.acquire(timeout=POLL_BUDGET + REQUEST_TIMEOUT[1])
+    locked = router.ha_zyxel_lock.acquire(
+        timeout=_wait(router, POLL_BUDGET + REQUEST_TIMEOUT[1])
+    )
     try:
         if locked:
             _logout(router)
@@ -161,7 +184,7 @@ def authenticate(router: Any) -> None:
     except Exception as err:
         raise ZyxelConnectionError("Unable to complete router login") from err
     finally:
-        router.params["timeout"] = REQUEST_TIMEOUT
+        router.params["timeout"] = _base_timeout(router)
 
     if not login_success or not getattr(router, "sessionkey", None):
         raise ZyxelAuthenticationError("The router rejected the credentials")
@@ -220,7 +243,7 @@ def fetch_status(router: Any) -> dict[str, Any]:
     start = time.monotonic()
     if not router.ha_zyxel_lock.acquire(timeout=LOCK_TIMEOUT):
         raise ZyxelBusyError("The previous request to the router is still running")
-    router.ha_zyxel_deadline = start + POLL_BUDGET
+    router.ha_zyxel_deadline = start + _wait(router, POLL_BUDGET)
     try:
         result = _fetch_status_locked(router)
         # Port forwards are a list of objects.
@@ -430,28 +453,34 @@ def set_wifi_enabled(router: Any, index: int, enabled: bool) -> None:
 
 
 def reboot_router(router: Any) -> None:
-    """Reboot the modem the way the web UI does.
+    """Reboot the modem the way the web UI does: ``POST /cgi-bin/Reboot``, no body.
 
-    The UI sends ``POST /cgi-bin/Reboot`` with no body and the session key in a
-    ``CSRFToken`` header. nr7101's own reboot() puts the key in the URL instead,
-    which newer firmware rejects with 403.
+    The NR7302 UI on 1.00(ACHA.6) puts the session key in the URL and gets 403
+    without it; older firmware wants it in a ``CSRFToken`` header and rejects
+    it in the URL with 403. Try the URL, then the header, then both again after
+    a new login.
     """
     with router.ha_zyxel_lock:
         _drop_kept_alive_connection(router)
         if not getattr(router, "sessionkey", None):
             authenticate(router)
-        for attempt in range(2):
+        for attempt in range(4):
             params = dict(router.params)
-            params["headers"] = {
-                **params.get("headers", {}),
-                "X-Requested-With": "XMLHttpRequest",
-                "CSRFToken": str(router.sessionkey),
-            }
+            url = f"{router.url}/cgi-bin/Reboot"
+            if attempt % 2 == 0:
+                url += f"?sessionkey={router.sessionkey}"
+            else:
+                params["headers"] = {
+                    **params.get("headers", {}),
+                    "X-Requested-With": "XMLHttpRequest",
+                    "CSRFToken": str(router.sessionkey),
+                }
             try:
-                with router.ha_zyxel_session.post(f"{router.url}/cgi-bin/Reboot", **params) as response:
-                    if response.status_code in (401, 403) and attempt == 0:
-                        router.sessionkey = None
-                        authenticate(router)
+                with router.ha_zyxel_session.post(url, **params) as response:
+                    if response.status_code in (401, 403) and attempt < 3:
+                        if attempt == 1:
+                            router.sessionkey = None
+                            authenticate(router)
                         continue
                     response.raise_for_status()
             except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):

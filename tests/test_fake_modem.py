@@ -48,6 +48,8 @@ class FakeModem:
         self.hits: list[str] = []
         self.cookies_seen: list[str | None] = []
         self.encodings: list[str | None] = []
+        self.csrf_tokens: list[str | None] = []
+        self.reboot_wants_header = False
         self.slow: set[str] = set()
         self.trickle: set[str] = set()
         self.drip: set[str] = set()
@@ -167,6 +169,12 @@ class FakeModem:
             def do_POST(self):
                 self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 modem.hits.append(self.path)
+                modem.csrf_tokens.append(self.headers.get("CSRFToken"))
+                if self.path.startswith("/cgi-bin/Reboot?") and modem.reboot_wants_header:
+                    self.send_response(403)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 modem.login_gate.wait()
                 return self._send({"sessionkey": "k1"})
 
@@ -495,6 +503,26 @@ def test_logout_with_dripping_reply_does_not_hang(api, modem):
     finally:
         modem.logout_drip = False
 
+
+def test_reboot_puts_the_key_in_the_url_first(api, modem):
+    # NR7302 on 1.00(ACHA.6), like its web UI.
+    router = api.create_router(modem.url, "admin", "pw")
+    api.fetch_status(router)
+    api.reboot_router(router)
+    assert modem.hits[-1] == "/cgi-bin/Reboot?sessionkey=k1"
+    assert router.sessionkey is None
+
+
+def test_reboot_falls_back_to_the_header(api, modem):
+    # Older firmware: 403 with the key in the URL, CSRFToken header instead.
+    router = api.create_router(modem.url, "admin", "pw")
+    api.fetch_status(router)
+    modem.reboot_wants_header = True
+    api.reboot_router(router)
+    reboots = [hit for hit in modem.hits if hit.startswith("/cgi-bin/Reboot")]
+    assert reboots == ["/cgi-bin/Reboot?sessionkey=k1", "/cgi-bin/Reboot"]
+    assert modem.csrf_tokens[-1] == "k1"
+    assert router.sessionkey is None
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

@@ -9,7 +9,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from custom_components.ha_zyxel.api import close_router, create_router, fetch_status
+from custom_components.ha_zyxel.api import (
+    close_router,
+    create_router,
+    fetch_status,
+    timeout_scale,
+)
 from custom_components.ha_zyxel.const import (
     CONF_HOST,
     CONF_PASSWORD,
@@ -35,10 +40,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     host = entry.data[CONF_HOST]
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
+    scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
 
     try:
         router = await hass.async_add_executor_job(
-            create_router, host, username, password
+            create_router, host, username, password, scan_interval
         )
     except Exception as ex:
         _LOGGER.error("Could not connect to Zyxel router: %s", ex)
@@ -49,7 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             # A full poll takes 7-10s on some models; never abandon one mid-flight,
             # otherwise the next poll logs in again and invalidates its session.
-            async with async_timeout.timeout(90):
+            async with async_timeout.timeout(90 * timeout_scale(scan_interval)):
                 def get_all_data():
                     data = fetch_status(router)
 
@@ -69,9 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER,
         name=DOMAIN,
         update_method=async_update_data,
-        update_interval=timedelta(
-            seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-        ),
+        update_interval=timedelta(seconds=scan_interval),
     )
 
     hass.data.setdefault(DOMAIN, {})
