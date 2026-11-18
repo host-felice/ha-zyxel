@@ -1,11 +1,10 @@
 > **Copia personale di [zulufoxtrot/ha-zyxel](https://github.com/zulufoxtrot/ha-zyxel).**
-> Nell'originale ogni domanda al router apre una connessione nuova, senza limite di tempo.
-> Se il router smette di rispondere, Home Assistant accumula letture in attesa finché non si
-> blocca, e il server web del router può andare in sovraccarico. Qui ogni lettura usa una sola
-> connessione, esce dal router quando l'integrazione si spegne e si chiude entro un tempo
-> massimo. Il router si legge ogni 2 minuti invece che ogni 30 secondi. La libreria `nr7101`
-> è inclusa, con la stessa correzione. La prova si lancia con `python tests/test_fake_modem.py`.
-> Ogni lunedì un workflow unisce le novità dell'originale.
+> Dalla 0.2.10 l'originale contiene le correzioni nate qui (una sola connessione, limite di
+> tempo su ogni domanda al router). Questa copia è l'originale più una cosa sola: l'intervallo
+> di lettura si regola da **Configura** (30-3600 secondi), proposta in
+> [zulufoxtrot/ha-zyxel#83](https://github.com/zulufoxtrot/ha-zyxel/pull/83). Quando
+> l'originale la pubblica, si torna a quello. Ogni lunedì un workflow unisce le novità
+> dell'originale.
 
 # ha-zyxel
 
@@ -78,6 +77,8 @@ Prerequisites:
 7. Click Submit.
 
 If connection fails, try with `http://` instead of `https://`.
+
+The router is polled every 30 seconds. To poll less often, open the integration and click **Configure** (30 to 3600 seconds).
 
 ## Adding cards to your dashboard
 

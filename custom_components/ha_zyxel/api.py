@@ -16,7 +16,7 @@ import requests
 import urllib3
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
-from . import nr7101
+from nr7101 import nr7101
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -141,8 +141,8 @@ def _logout(router: Any) -> None:
     _drop_kept_alive_connection(router)
     url = f"{router.url}/cgi-bin/UserLogout?sessionkey={router.sessionkey}"
     try:
-        # Streamed and closed after the headers: reading the whole reply would
-        # let a trickling modem stretch the logout forever, and it is not needed.
+        # Not nr7101's logout(): it reads the whole reply, which a trickling
+        # modem can stretch forever. The reply is not needed past the headers.
         with router.ha_zyxel_session.get(url, **{**router.params, "stream": True}):
             pass
     except Exception as err:  # noqa: BLE001
@@ -264,7 +264,7 @@ def _decode(router: Any, data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_objects(router: Any, oid: str) -> list[dict[str, Any]]:
-    """Return every object of a DAL oid."""
+    """Return every object of a DAL oid (get_json_object only returns the first)."""
     url = f"{router.url}/cgi-bin/DAL?oid={oid}&sessionkey={router.sessionkey}"
     params = {
         **router.params,
@@ -287,11 +287,24 @@ def get_objects(router: Any, oid: str) -> list[dict[str, Any]]:
         response.raise_for_status()
         # The read timeout only limits each wait for data: a modem trickling a
         # large reply (lanhosts, nat) could run past the poll budget without
-        # this. read1() without decoding makes at most one socket read, so the
-        # budget is checked after every read.
+        # this. Read in small chunks without decoding, so the budget is checked
+        # after every read. urllib3 2.x has read1() (at most one socket read);
+        # 1.x does not, so fall back to a plain read() of a small amount.
         body = bytearray()
         try:
-            while chunk := response.raw.read1(65536, decode_content=False):
+            # urllib3 2.x (what Home Assistant pins) has read1(): at most one
+            # socket read, so a trickling body cannot hold the loop. urllib3 1.x
+            # has no equivalent that keeps the connection usable, so we do not
+            # try to fake it: the per-read timeout still bounds each wait.
+            read1 = getattr(response.raw, "read1", None)
+            while True:
+                chunk = (
+                    read1(65536, decode_content=False)
+                    if read1 is not None
+                    else response.raw.read(65536, decode_content=False)
+                )
+                if not chunk:
+                    break
                 body += chunk
                 _request_timeout(router)  # Raises once the poll is out of time.
         except urllib3.exceptions.ReadTimeoutError as err:
@@ -420,7 +433,8 @@ def reboot_router(router: Any) -> None:
     """Reboot the modem the way the web UI does.
 
     The UI sends ``POST /cgi-bin/Reboot`` with no body and the session key in a
-    ``CSRFToken`` header. Newer firmware rejects the key in the URL with 403.
+    ``CSRFToken`` header. nr7101's own reboot() puts the key in the URL instead,
+    which newer firmware rejects with 403.
     """
     with router.ha_zyxel_lock:
         _drop_kept_alive_connection(router)

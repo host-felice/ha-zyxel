@@ -42,9 +42,8 @@ jobs:
       - name: Test
         if: steps.merge.outputs.result == 'merged'
         run: |
-          pip install requests "$(jq -r '.requirements[]' custom_components/ha_zyxel/manifest.json)"
-          python tests/test_fake_modem.py
-          python tests/test_device_info.py
+          pip install "urllib3>=2.0" requests pycryptodome pytest "$(jq -r '.requirements[]' custom_components/ha_zyxel/manifest.json)"
+          python -m pytest tests/ -q
       - name: Open pull request
         if: steps.merge.outputs.result == 'merged' && success()
         run: |
